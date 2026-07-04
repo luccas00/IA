@@ -1,4 +1,4 @@
-# CSI457 – Inteligência Artificial
+# CSI701 – Inteligência Artificial
 # Trabalho Prático 2 – Agentes Inteligentes para Jogos
 
 ## Integrantes
