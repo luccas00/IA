@@ -1,4 +1,4 @@
-# CSI701 – 26.1 – Inteligência Artificial - Trabalho Pratico 2
+# CSI701 – 26.1 – Inteligência Artificial - Trabalho Prático 2
 
 ## 👤 Discentes
 **Ana Flávia - xx.x.xxxx**
