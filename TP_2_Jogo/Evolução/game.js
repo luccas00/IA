@@ -222,8 +222,21 @@ const IA_GRID_COLS = Math.ceil(arena.width / IA_GRID_SIZE);
 const IA_GRID_ROWS = Math.ceil(arena.height / IA_GRID_SIZE);
 const IA_NAV_MARGIN = 12;
 const IA_MIN_BOT_DISTANCE = 34;
-const IA_ONLINE_PERCEPTION_RADIUS = 2;
 const IA_SHARED_MEMORY_MAX_AGE = 4500;
+
+function getRaioPercepcaoIA() {
+    // Todos os níveis trabalham com percepção parcial.
+    // A evolução da dificuldade aumenta o alcance perceptivo e a qualidade da decisão.
+    if (dificuldade <= 1) return 3;
+    if (dificuldade === 2) return 4;
+    if (dificuldade === 3) return 5;
+    if (dificuldade === 4) return 6;
+    return 8;
+}
+
+function getAlcancePercepcaoMundo() {
+    return IA_GRID_SIZE * getRaioPercepcaoIA();
+}
 
 // Memória compartilhada por equipe para os níveis 4 e 5.
 // É resetada ao iniciar uma nova partida.
@@ -358,9 +371,11 @@ function perceberAmbienteOnline(bot) {
     let atual = worldToGrid(bot.x, bot.y);
     let reveladas = 0;
 
-    for (let dr = -IA_ONLINE_PERCEPTION_RADIUS; dr <= IA_ONLINE_PERCEPTION_RADIUS; dr++) {
-        for (let dc = -IA_ONLINE_PERCEPTION_RADIUS; dc <= IA_ONLINE_PERCEPTION_RADIUS; dc++) {
-            if (Math.abs(dr) + Math.abs(dc) > IA_ONLINE_PERCEPTION_RADIUS) continue;
+    let raioPercepcao = getRaioPercepcaoIA();
+
+    for (let dr = -raioPercepcao; dr <= raioPercepcao; dr++) {
+        for (let dc = -raioPercepcao; dc <= raioPercepcao; dc++) {
+            if (Math.abs(dr) + Math.abs(dc) > raioPercepcao) continue;
 
             let cell = { r: atual.r + dr, c: atual.c + dc };
             if (cell.r < 0 || cell.c < 0 || cell.r >= IA_GRID_ROWS || cell.c >= IA_GRID_COLS) continue;
@@ -380,8 +395,9 @@ function perceberAmbienteOnline(bot) {
 
     // Compartilhamento parcial de caixas conhecidas pela equipe.
     caixas.forEach(cx => {
+        if (!isCaixaConhecidaPeloBot(bot, cx)) return;
         let d = Math.hypot(cx.x - bot.x, cx.y - bot.y);
-        if (d <= IA_GRID_SIZE * (IA_ONLINE_PERCEPTION_RADIUS + 1)) {
+        if (d <= IA_GRID_SIZE * (raioPercepcao + 1)) {
             memoriaEquipe.caixas.set(`${Math.round(cx.x)},${Math.round(cx.y)}`, {
                 x: cx.x,
                 y: cx.y,
@@ -392,6 +408,87 @@ function perceberAmbienteOnline(bot) {
     });
 
     bot.aiRevealedCells = (bot.aiRevealedCells || 0) + reveladas;
+}
+
+function isCelulaConhecidaPeloBot(bot, cell) {
+    garantirMemoriaOnlineBot(bot);
+    let key = gridKey(cell);
+    if (bot.aiKnownCells.has(key)) return true;
+    if (dificuldade >= 4 && garantirMemoriaEquipe(bot.teamId).known.has(key)) return true;
+    return false;
+}
+
+function isAlvoPercebidoPeloBot(bot, alvo) {
+    if (!alvo) return false;
+
+    let distancia = Math.hypot(alvo.x - bot.x, alvo.y - bot.y);
+    let alcance = getAlcancePercepcaoMundo();
+
+    // Percepção direta: dentro do raio perceptivo e sem parede bloqueando a linha de visão.
+    if (distancia <= alcance && !temParede(bot.x, bot.y, alvo.x, alvo.y)) return true;
+
+    // Em níveis avançados, a equipe pode reaproveitar a última posição vista do jogador.
+    if (dificuldade >= 4 && alvo.id === "player") {
+        let memoriaEquipe = garantirMemoriaEquipe(bot.teamId);
+        if (memoriaEquipe.enemy && Date.now() - memoriaEquipe.enemy.seenAt <= IA_SHARED_MEMORY_MAX_AGE) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function isCaixaConhecidaPeloBot(bot, caixa) {
+    if (!caixa) return false;
+
+    let cell = worldToGrid(caixa.x, caixa.y);
+    if (isCelulaConhecidaPeloBot(bot, cell)) return true;
+
+    let distancia = Math.hypot(caixa.x - bot.x, caixa.y - bot.y);
+    if (distancia <= getAlcancePercepcaoMundo() && !temParede(bot.x, bot.y, caixa.x, caixa.y)) return true;
+
+    if (dificuldade >= 4) {
+        let memoriaEquipe = garantirMemoriaEquipe(bot.teamId);
+        return memoriaEquipe.caixas.has(`${Math.round(caixa.x)},${Math.round(caixa.y)}`);
+    }
+
+    return false;
+}
+
+function getAlvoCombateBot(bot, now) {
+    if (now < (bot.ignoreTargetUntil || 0)) return { alvo: null, distancia: Infinity, visaoLimpa: false };
+
+    let candidatos = [];
+
+    if (player && player.hp > 0 && player.teamId !== bot.teamId) {
+        let d = Math.hypot(player.x - bot.x, player.y - bot.y);
+        let visaoLimpa = !temParede(bot.x, bot.y, player.x, player.y);
+        candidatos.push({ alvo: player, distancia: d, visaoLimpa, isPlayer: true });
+    }
+
+    bots.forEach(o => {
+        if (!o || o === bot || o.hp <= 0 || o.teamId === bot.teamId) return;
+        let d = Math.hypot(o.x - bot.x, o.y - bot.y);
+        let visaoLimpa = !temParede(bot.x, bot.y, o.x, o.y);
+        candidatos.push({ alvo: o, distancia: d, visaoLimpa, isPlayer: false });
+    });
+
+    // A partir do nível 3, o alvo principal passa a ser o jogador.
+    // Outros bots só são considerados se estiverem muito próximos, evitando brigas aleatórias entre bots.
+    let playerCandidate = candidatos.find(c => c.isPlayer && c.visaoLimpa && c.distancia <= getAlcancePercepcaoMundo() + 220);
+    if (dificuldade >= 3 && playerCandidate) return playerCandidate;
+
+    let limiteOutrosBots = dificuldade <= 2 ? Infinity : (dificuldade === 3 ? 180 : (dificuldade === 4 ? 120 : 70));
+
+    let visiveis = candidatos
+        .filter(c => c.visaoLimpa)
+        .filter(c => c.isPlayer || c.distancia <= limiteOutrosBots)
+        .sort((a, b) => {
+            if (a.isPlayer !== b.isPlayer) return a.isPlayer ? -1 : 1;
+            return a.distancia - b.distancia;
+        });
+
+    return visiveis[0] || { alvo: null, distancia: Infinity, visaoLimpa: false };
 }
 
 function getGridNeighborsOnline(cell, bot, radius = 15) {
@@ -623,7 +720,7 @@ function selecionarObjetivoCooperativo(bot, alvoM, menorD, visaoLimpa, now) {
         return { alvo: flanco, tipo: "flanco", distancia: Math.hypot(flanco.x - bot.x, flanco.y - bot.y) };
     }
 
-    return selecionarObjetivoIA(bot, alvoM, menorD);
+    return selecionarObjetivoIA(bot, alvoM, menorD, visaoLimpa, now);
 }
 
 function getInimigosDoBot(bot) {
@@ -652,6 +749,7 @@ function getCaixaMaisRelevante(bot, limite = Infinity) {
     let melhor = null;
     let menorScore = Infinity;
     caixas.forEach(cx => {
+        if (!isCaixaConhecidaPeloBot(bot, cx)) return;
         let d = Math.hypot(cx.x - bot.x, cx.y - bot.y);
         if (d > limite) return;
         let prioridade = 0;
@@ -763,21 +861,43 @@ function moverBotComAStar(bot, alvo, now) {
     return moveu;
 }
 
-function selecionarObjetivoIA(bot, alvoM, menorD) {
+function selecionarObjetivoIA(bot, alvoM, menorD, visaoLimpa = false, now = Date.now()) {
+    // Todos os níveis iniciam pela percepção parcial do ambiente.
+    // Isso evita bots "oniscientes" usando o mapa completo desde o nível 1.
+    perceberAmbienteOnline(bot);
+
     let dCentro = Math.hypot(bot.x - 750, bot.y - 750);
     if (modoJogo !== 'boss' && dCentro > safeZone.radius - 80) {
         return { alvo: { x: 750, y: 750, tipo: "zona" }, tipo: "zona", distancia: dCentro };
     }
 
-    let caixaUrgente = getCaixaMaisRelevante(bot, dificuldade >= 3 ? 700 : 330);
+    // Sobrevivência ainda tem prioridade se o bot estiver vulnerável.
+    let limiteCaixa = IA_GRID_SIZE * (getRaioPercepcaoIA() + 2);
+    let caixaUrgente = getCaixaMaisRelevante(bot, dificuldade >= 3 ? limiteCaixa + 250 : limiteCaixa);
+    if (caixaUrgente && (bot.hp < 70 || bot.armor < 30 || dificuldade <= 2)) {
+        let d = Math.hypot(caixaUrgente.x - bot.x, caixaUrgente.y - bot.y);
+        return { alvo: caixaUrgente, tipo: "caixa", distancia: d };
+    }
+
+    // Quanto maior o nível, maior a prioridade em focar o jogador.
+    if (player && player.hp > 0 && player.teamId !== bot.teamId && isAlvoPercebidoPeloBot(bot, player)) {
+        let dPlayer = Math.hypot(player.x - bot.x, player.y - bot.y);
+        if (dificuldade >= 3 || !caixaUrgente || dPlayer < 420) {
+            return { alvo: player, tipo: "player", distancia: dPlayer };
+        }
+    }
+
     if (caixaUrgente) {
         let d = Math.hypot(caixaUrgente.x - bot.x, caixaUrgente.y - bot.y);
         return { alvo: caixaUrgente, tipo: "caixa", distancia: d };
     }
 
-    let inimigo = getInimigoMaisProximo(bot);
-    if (inimigo.alvo) {
-        return { alvo: inimigo.alvo, tipo: "inimigo", distancia: inimigo.distancia };
+    // Níveis baixos ainda podem reagir a outros bots próximos.
+    if (dificuldade <= 2) {
+        let inimigo = getInimigoMaisProximo(bot);
+        if (inimigo.alvo && isAlvoPercebidoPeloBot(bot, inimigo.alvo)) {
+            return { alvo: inimigo.alvo, tipo: "inimigo", distancia: inimigo.distancia };
+        }
     }
 
     let patrulha = getPontoPatrulha(bot);
@@ -787,7 +907,7 @@ function selecionarObjetivoIA(bot, alvoM, menorD) {
 function aplicarIABotPorNivel(bot, alvoM, menorD, visaoLimpa, now) {
     let decisao = dificuldade >= 5
         ? selecionarObjetivoCooperativo(bot, alvoM, menorD, visaoLimpa, now)
-        : selecionarObjetivoIA(bot, alvoM, menorD);
+        : selecionarObjetivoIA(bot, alvoM, menorD, visaoLimpa, now);
 
     let alvo = decisao.alvo;
     if (!alvo) return;
@@ -804,16 +924,16 @@ function aplicarIABotPorNivel(bot, alvoM, menorD, visaoLimpa, now) {
         return;
     }
 
-    // Nível 3: usa A* completo sobre grade lógica da arena.
+    // Nível 3: usa A* com percepção parcial. O bot ainda replaneja, mas sem conhecimento global total.
     if (dificuldade === 3) {
-        if (decisao.tipo === "inimigo" && visaoLimpa && decisao.distancia >= 150 && decisao.distancia <= 260) {
+        if ((decisao.tipo === "inimigo" || decisao.tipo === "player") && visaoLimpa && decisao.distancia >= 150 && decisao.distancia <= 260) {
             let ang = Math.atan2(alvo.y - bot.y, alvo.x - bot.x);
             bot.angle = ang;
             moverBotSeguro(bot, ang + (Math.PI / 2 * bot.strafeDir), bot.speed);
             return;
         }
 
-        let moveu = moverBotComAStar(bot, alvo, now);
+        let moveu = moverBotComAStarOnline(bot, alvo, now);
         if (!moveu) moverBotComDesvioSimples(bot, alvo);
         return;
     }
@@ -822,7 +942,7 @@ function aplicarIABotPorNivel(bot, alvoM, menorD, visaoLimpa, now) {
     if (dificuldade === 4) {
         atualizarMemoriaDeCombate(bot, alvoM, visaoLimpa, now);
 
-        if (decisao.tipo === "inimigo" && visaoLimpa && decisao.distancia >= 150 && decisao.distancia <= 260) {
+        if ((decisao.tipo === "inimigo" || decisao.tipo === "player") && visaoLimpa && decisao.distancia >= 150 && decisao.distancia <= 260) {
             let ang = Math.atan2(alvo.y - bot.y, alvo.x - bot.x);
             bot.angle = ang;
             moverBotSeguro(bot, ang + (Math.PI / 2 * bot.strafeDir), bot.speed);
@@ -1115,9 +1235,11 @@ function update() {
     for (let i = bots.length - 1; i >= 0; i--) {
         let bot = bots[i]; let oldX = bot.x; let oldY = bot.y;
         if (!bot.isBoss && modoJogo !== 'boss') { let dBC = Math.hypot(bot.x - 750, bot.y - 750); if (dBC > safeZone.radius && now - (bot.lastToxicDamage || 0) > 1000) { darDano(bot, 10, bot.x, bot.y, false, "gas"); bot.lastToxicDamage = now; if (bot.hp <= 0) { bots.splice(i, 1); atualizarUI(); continue; } } }
-        let isIgnoring = now < (bot.ignoreTargetUntil || 0); let alvoM = null; let menorD = Infinity;
-        if (!isIgnoring) { if (player.hp > 0 && player.teamId !== bot.teamId) { let d = Math.hypot(player.x - bot.x, player.y - bot.y); if (d < menorD) { menorD = d; alvoM = player; } } bots.forEach(o => { if (o.teamId !== bot.teamId) { let d = Math.hypot(o.x - bot.x, o.y - bot.y); if (d < menorD) { menorD = d; alvoM = o; } } }); }
-        let visaoLimpa = alvoM ? !temParede(bot.x, bot.y, alvoM.x, alvoM.y) : false; if (alvoM && !visaoLimpa) alvoM = null;
+        let alvoCombate = getAlvoCombateBot(bot, now);
+        let alvoM = alvoCombate.alvo;
+        let menorD = alvoCombate.distancia;
+        let visaoLimpa = alvoCombate.visaoLimpa;
+        if (alvoM && !visaoLimpa) alvoM = null;
         if (bot.isBoss) {
             if (alvoM) { bot.angle = Math.atan2(alvoM.y - bot.y, alvoM.x - bot.x); if (now - bot.lastAttackChange > 3000) { bot.attackState = Math.floor(Math.random() * 4); bot.lastAttackChange = now; } if (bot.attackState === 0) { if (menorD > 200 || !visaoLimpa) moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed); if (visaoLimpa && now - bot.lastShot > bot.shootCooldown) { for (let a = -0.2; a <= 0.2; a += 0.2) { bullets.push({ ownerId: bot.id, teamId: bot.teamId, x: bot.x, y: bot.y, angle: bot.angle + a, speed: 7, damage: bot.damage, skin: "boss" }); } bot.lastShot = now; tocarSom("tiroB"); } } else if (bot.attackState === 1) { if (menorD > 80 || !visaoLimpa) { moverEntidade(bot, Math.cos(bot.angle) * (bot.speed * 1.5), Math.sin(bot.angle) * (bot.speed * 1.5)); } else if (now - bot.lastShot > 1000) { tocarSom("espada"); slashes.push({ x: bot.x, y: bot.y, angle: bot.angle, life: 1.0, radius: 90, skin: "boss" });[player, ...bots].forEach(o => { if (o.hp > 0 && o.teamId !== bot.teamId && Math.hypot(o.x - bot.x, o.y - bot.y) < 100) { darDano(o, 60, o.x, o.y, true, bot.id); } }); bot.lastShot = now; } } else if (bot.attackState === 2) { if (visaoLimpa && menorD > 100 && menorD < 600 && now - bot.lastShot > 2000) { tocarSom("bomba"); basucas.push({ teamId: bot.teamId, ownerId: bot.id, x: bot.x, y: bot.y, angle: bot.angle, speed: 12, damage: 60 }); bot.lastShot = now; } else if (menorD > 600 || !visaoLimpa) { moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed); } } else if (bot.attackState === 3) { if (menorD > 150 || !visaoLimpa) moverEntidade(bot, Math.cos(bot.angle) * bot.speed, Math.sin(bot.angle) * bot.speed); if (visaoLimpa && now - bot.lastShot > 200) { bullets.push({ ownerId: bot.id, teamId: bot.teamId, x: bot.x, y: bot.y, angle: bot.angle + (Math.random() * 0.8 - 0.4), speed: 5, damage: 5, skin: "boss" }); bot.lastShot = now; tocarSom("powerup"); } } } else { if (!bot.patrolPoint || Math.hypot(bot.patrolPoint.x - bot.x, bot.patrolPoint.y - bot.y) < 40) { bot.patrolPoint = getValidSpawn(false, false, 60); } let ang = Math.atan2(bot.patrolPoint.y - bot.y, bot.patrolPoint.x - bot.x); bot.angle = ang; moverEntidade(bot, Math.cos(ang) * bot.speed, Math.sin(ang) * bot.speed); }
         } else {
