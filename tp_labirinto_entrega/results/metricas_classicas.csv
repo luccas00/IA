@@ -1,0 +1,6 @@
+Algoritmo;Sucesso;Custo;Passos;Explorados;Expandidos;Tempo;Fronteira
+BFS;True;78;78;466;466;0.00234733;12
+DFS;True;242;242;434;434;0.00121516;30
+UCS;True;78;78;468;468;0.00148725;12
+Gulosa;True;96;96;128;128;0.00041846;21
+A*;True;78;78;309;309;0.00122825;22
