@@ -10,6 +10,7 @@
 
 ---
 
+
 # Descrição
 
 Este projeto consiste na evolução da Inteligência Artificial dos bots do jogo **Mega Arena Royale**, desenvolvido originalmente pelo professor Tiago Linhares Medeiros.
