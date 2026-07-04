@@ -2,8 +2,11 @@
 
 ## 👤 Discentes
 **Ana Flávia - xx.x.xxxx**
+
 **Eduarda Gomes - xx.x.xxxx**
+
 **Thiago Augusto - xx.x.xxxx**
+
 **Luccas Carneiro - 20.1.8015**
 
 ---
