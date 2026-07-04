@@ -1,4 +1,11 @@
-# Trabalho Prático - Agente Inteligente em Labirinto
+# Trabalho Prático 1 - Agente Inteligente em Labirinto
+
+## 👤 Discentes
+
+**Luccas Carneiro - 20.1.8015**
+
+---
+
 
 ## Objetivo
 
