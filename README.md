@@ -6,7 +6,7 @@
 - Ana Flávia
 - Eduarda Gomes
 - Thiago Augusto
-- Luccas Carneiro – 20.1.8015
+- Luccas Carneiro
 
 ---
 
